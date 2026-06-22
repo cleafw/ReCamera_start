@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=reCamera
+Comment=Open reCamera dashboard
+Exec=bash -c "source /home/seeed/Seeed/venv/bin/activate && exec python /home/seeed/Seeed/ReCamera_start/reCameraStart.py"
+Icon=utilities-terminal
+X-GNOME-Autostart-enabled=true
+X-GNOME-Autostart-Delay=5
+StartupNotify=false
+Terminal=false

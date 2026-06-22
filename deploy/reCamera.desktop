@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=reCamera
+Comment=Open reCamera AI dashboard
+Exec=bash -c "source /home/seeed/Seeed/venv/bin/activate && python /home/seeed/Seeed/ReCamera_start/reCameraStart.py"
+Icon=utilities-terminal
+Terminal=false

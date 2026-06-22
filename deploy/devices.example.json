@@ -1,0 +1,25 @@
+{
+  "default": "recomputer-office",
+  "devices": {
+    "recomputer-office": {
+      "comment": "办公室 recomputer 示例，复制为 devices.local.json 后修改",
+      "host": "192.168.1.28",
+      "port": 22,
+      "user": "seeed",
+      "password": "CHANGE_ME",
+      "remote_home": "/home/seeed",
+      "project_dir": "Seeed/ReCamera_start",
+      "venv_dir": "Seeed/venv"
+    },
+    "recomputer-lab": {
+      "comment": "另一台设备示例",
+      "host": "192.168.2.100",
+      "port": 22,
+      "user": "seeed",
+      "password": "CHANGE_ME",
+      "remote_home": "/home/seeed",
+      "project_dir": "Seeed/ReCamera_start",
+      "venv_dir": "Seeed/venv"
+    }
+  }
+}

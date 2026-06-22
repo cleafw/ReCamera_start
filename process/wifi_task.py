@@ -1,11 +1,14 @@
-import subprocess, sys
+import subprocess
+import sys
 import time
 import os
-from data.globalData import GDat, GObject, GObj
+import urllib.request
+import urllib.error
+
+from data.globalData import GDat
 from debug.debugOut import log
 
 
-# 读取 shell 环境变量
 def read_shell_env():
     """
     优先从 gnome-shell 进程读取环境变量
@@ -13,7 +16,6 @@ def read_shell_env():
     如果当前环境也缺少必要变量，尝试自动设置默认值
     """
     try:
-        # 尝试从 gnome-shell 进程读取
         pid = subprocess.check_output(["pgrep", "-n", "gnome-shell"]).decode().strip()
         log.info(f"找到 gnome-shell 进程 PID: {pid}")
 
@@ -29,14 +31,12 @@ def read_shell_env():
         return result
 
     except subprocess.CalledProcessError:
-        # 从当前环境读取
         log.warning("未找到 gnome-shell 进程，从当前环境读取变量")
         result = {k: os.environ.get(k, "") for k in GDat.NEEDED}
 
-        # 自动设置缺失的环境变量（使用合理的默认值）
         if not result.get("DISPLAY"):
             result["DISPLAY"] = ":0"
-            log.warning(f"DISPLAY 未设置，使用默认值: :0")
+            log.warning("DISPLAY 未设置，使用默认值: :0")
 
         if not result.get("XDG_RUNTIME_DIR"):
             uid = os.getuid()
@@ -46,12 +46,10 @@ def read_shell_env():
         if not result.get("DBUS_SESSION_BUS_ADDRESS"):
             uid = os.getuid()
             result["DBUS_SESSION_BUS_ADDRESS"] = f"unix:path=/run/user/{uid}/bus"
-            log.warning(f"DBUS_SESSION_BUS_ADDRESS 未设置，使用默认值: unix:path=/run/user/{uid}/bus")
+            log.warning(
+                f"DBUS_SESSION_BUS_ADDRESS 未设置，使用默认值: unix:path=/run/user/{uid}/bus"
+            )
 
-        # WAYLAND_DISPLAY 是可选的，不需要检查
-        # 在 X11 环境下可能不存在
-
-        # 验证关键环境变量是否存在
         critical_vars = ["DISPLAY", "XDG_RUNTIME_DIR", "DBUS_SESSION_BUS_ADDRESS"]
         missing = [k for k in critical_vars if not result.get(k)]
 
@@ -61,11 +59,9 @@ def read_shell_env():
             sys.exit(3)
 
         log.info("环境变量设置成功（使用当前环境 + 默认值）")
-
-        # 打印最终使用的环境变量
         log.debug("最终环境变量:")
         for k, v in result.items():
-            if k in critical_vars:  # 只打印关键变量
+            if k in critical_vars:
                 log.debug(f"  {k} = {v}")
 
         return result
@@ -75,46 +71,120 @@ def read_shell_env():
         sys.exit(3)
 
 
-# 启动浏览器
-# 启动浏览器
+def wait_for_gnome_shell(timeout_sec: int = 60) -> bool:
+    """开机自启时桌面可能尚未就绪，等待 gnome-shell 出现。"""
+    deadline = time.time() + timeout_sec
+    while time.time() < deadline:
+        try:
+            subprocess.check_output(["pgrep", "-x", "gnome-shell"], stderr=subprocess.DEVNULL)
+            log.info("gnome-shell 已就绪")
+            return True
+        except subprocess.CalledProcessError:
+            log.info("等待 gnome-shell 启动...")
+            time.sleep(GDat.pollIntervalSec)
+    log.warning("等待 gnome-shell 超时，继续执行")
+    return False
+
+
+def usb_iface_has_ipv4(iface: str) -> bool:
+    try:
+        out = subprocess.check_output(
+            ["ip", "-4", "addr", "show", iface],
+            stderr=subprocess.DEVNULL,
+        ).decode()
+        return "inet " in out
+    except subprocess.CalledProcessError:
+        return False
+
+
+def wait_for_usb_network(timeout_sec: int | None = None) -> bool:
+    """等待 reCamera USB-NCM 网卡就绪并获取 IP。"""
+    timeout_sec = timeout_sec if timeout_sec is not None else GDat.waitTimeoutSec
+    iface = GDat.usbIface
+    deadline = time.time() + timeout_sec
+    while time.time() < deadline:
+        if usb_iface_has_ipv4(iface):
+            log.info(f"{iface} 网卡已获取 IP，USB 网络就绪")
+            return True
+        log.info(f"等待 {iface} USB 网卡就绪...")
+        time.sleep(GDat.pollIntervalSec)
+    log.error(f"等待 {iface} 超时（{timeout_sec}s）")
+    return False
+
+
+def recamera_http_ready(host: str | None = None, timeout_sec: float = 3.0) -> bool:
+    host = host or GDat.reCameraHost
+    url = f"http://{host}/"
+    try:
+        with urllib.request.urlopen(url, timeout=timeout_sec) as resp:
+            return resp.status < 500
+    except (urllib.error.URLError, TimeoutError, OSError) as exc:
+        log.info(f"reCamera 尚未就绪 ({host}): {exc}")
+        return False
+
+
+def wait_for_recamera(timeout_sec: int | None = None) -> bool:
+    """等待 reCamera Web 服务可访问。"""
+    timeout_sec = timeout_sec if timeout_sec is not None else GDat.waitTimeoutSec
+    host = GDat.reCameraHost
+    deadline = time.time() + timeout_sec
+    while time.time() < deadline:
+        if recamera_http_ready(host):
+            log.info(f"reCamera HTTP 服务已就绪: http://{host}/")
+            return True
+        time.sleep(GDat.pollIntervalSec)
+    log.error(f"等待 reCamera HTTP 超时（{timeout_sec}s）")
+    return False
+
+
+def wait_for_recamera_ready() -> None:
+    """
+    开机自启时 USB 网卡与 reCamera 往往晚于浏览器脚本。
+    必须先等待网络和 HTTP 服务就绪，再打开 Firefox。
+    """
+    log.info("等待 reCamera 设备与网络就绪...")
+    wait_for_gnome_shell()
+    wait_for_usb_network()
+    if not wait_for_recamera():
+        log.warning("reCamera 仍未响应，将尝试打开浏览器（页面可能暂时无法连接）")
+
+
 def start_browser():
+    wait_for_recamera_ready()
+
     shell_env = read_shell_env()
 
-    # 打印将要使用的环境变量（用于调试）
     log.debug("使用的环境变量:")
     for k, v in shell_env.items():
         log.debug(f"  {k} = {v}")
 
-    # 方案 1: 直接启动浏览器（推荐）
-    # 合并当前环境变量和必需的桌面环境变量
     env = os.environ.copy()
     env.update(shell_env)
 
     cmd = [
-        "/usr/bin/firefox", "--kiosk", GDat.reCamera  # 全屏
+        "/usr/bin/firefox",
+        "--kiosk",
+        GDat.reCamera,
         # "/usr/bin/firefox", GDat.reCamera   # 普通模式
     ]
 
     log.info(f"启动浏览器命令: {' '.join(cmd)}")
 
     try:
-        # 使用 subprocess.Popen 在后台启动
         process = subprocess.Popen(
             cmd,
             env=env,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
-            start_new_session=True  # 在新会话中启动，避免被父进程影响
+            start_new_session=True,
         )
         log.info(f"浏览器已启动，PID: {process.pid}")
 
-        # 等待一小会，检查进程是否立即退出（说明启动失败）
         time.sleep(2)
         if process.poll() is not None:
             log.error(f"浏览器启动后立即退出，返回码: {process.returncode}")
             sys.exit(2)
-        else:
-            log.info("浏览器启动成功并正在运行")
+        log.info("浏览器启动成功并正在运行")
 
     except Exception as e:
         log.error(f"启动浏览器时发生异常: {e}")

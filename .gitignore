@@ -1,0 +1,2 @@
+# 本地设备连接信息（含密码），勿提交到 Git
+deploy/devices.local.json

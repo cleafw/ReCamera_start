@@ -3,25 +3,31 @@
 这个项目的作用很简单：  
 在设备启动后，自动用浏览器全屏打开指定的 reCamera 控制台页面（Kiosk 模式）。
 
-**在不同环境中使用时，主要只需要改 1 个地方：**
-- 要访问的 **reCamera 地址**
-
-这个配置在 `data/globalData.py` 里。
+**在不同环境中使用时，主要改 `data/globalData.py` 里的配置：**
+- reCamera 控制台地址（`reCamera`）
+- reCamera 设备 IP（`reCameraHost`，用于开机等待检测）
+- USB 网卡接口名（`usbIface`，reComputer 上一般为 `usb0`）
 
 ---
 
 ## 项目结构
 
 ```
-reCameraStart/
+ReCamera_start/
 ├── reCameraStart.py          # 主入口脚本
 ├── process/
-│   └── wifi_task.py          # 浏览器启动逻辑
+│   └── wifi_task.py          # 等待设备就绪 + 浏览器启动逻辑
 ├── data/
-│   ├── globalData.py         # 全局配置（reCamera 地址等）
+│   ├── globalData.py         # 全局配置（地址、等待参数等）
 │   └── path.py               # 日志路径配置
 ├── debug/
 │   └── debugOut.py           # 日志输出模块
+├── deploy/
+│   ├── deploy_to_device.py   # 一键部署（支持多设备、指定 IP）
+│   ├── devices.example.json  # 设备配置模板
+│   ├── devices.local.json    # 本地设备配置（含密码，不入库）
+│   ├── reCameraStart.desktop # 参考模板（部署时按设备路径自动生成）
+│   └── reCamera.desktop
 └── README.md                 # 本说明文件
 ```
 
@@ -34,10 +40,12 @@ reCameraStart/
 ```python
 class GData:
     def __init__(self):
-        # reCamera 控制台地址
         self.reCamera = "http://192.168.42.1/#/dashboard"
+        self.reCameraHost = "192.168.42.1"
+        self.usbIface = "usb0"
+        self.waitTimeoutSec = 120
+        self.pollIntervalSec = 2
 
-        # 桌面环境变量（一般不用改）
         self.NEEDED = [
             "DISPLAY",
             "XDG_RUNTIME_DIR",
@@ -48,49 +56,59 @@ class GData:
 
 ---
 
-## 2. reCamera：控制台地址（按需修改）
+## 2. reCamera 地址与等待参数（按需修改）
+
+### 控制台地址
 
 字段：
 ```python
 self.reCamera = "http://192.168.42.1/#/dashboard"
 ```
 
-根据你的 reCamera 设备实际 IP 地址来改：
+根据 reCamera 实际 IP 修改，例如：
 
-- 如果 reCamera 的 IP 是 **192.168.42.1**（默认）：
-  ```python
-  self.reCamera = "http://192.168.42.1/#/dashboard"
-  ```
+```python
+self.reCamera = "http://192.168.42.1/#/dashboard"
+self.reCameraHost = "192.168.42.1"
+```
 
-- 如果 reCamera 的 IP 变了，比如 **192.168.1.100**：
-  ```python
-  self.reCamera = "http://192.168.1.100/#/dashboard"
-  ```
+如果 IP 变了（例如 `192.168.1.100`），**两个字段要一起改**：
 
-- 如果想打开 **其他页面**：
-  ```python
-  self.reCamera = "http://192.168.42.1/#/settings"
-  ```
+```python
+self.reCamera = "http://192.168.1.100/#/dashboard"
+self.reCameraHost = "192.168.1.100"
+```
 
-> ✅ 换一台 reCamera 设备时：只要 IP 地址变了，就改 `self.reCamera` 为新的地址即可。
+### 开机等待参数
+
+| 字段 | 默认值 | 说明 |
+|------|--------|------|
+| `usbIface` | `usb0` | reCamera USB-NCM 网卡名，可用 `ip addr` 查看 |
+| `waitTimeoutSec` | `120` | 最长等待时间（秒） |
+| `pollIntervalSec` | `2` | 每次检测间隔（秒） |
+
+开机时脚本会依次等待：
+
+1. `gnome-shell` 桌面就绪  
+2. `usbIface` 网卡获取 IP  
+3. `http://reCameraHost/` 返回正常响应  
+
+全部就绪后再启动 Firefox，避免重启后页面显示「无法连接」。
 
 ---
 
 ## 3. NEEDED：桌面环境变量（一般不用改）
 
-字段：
 ```python
 self.NEEDED = [
-    "DISPLAY",              # X11 显示服务器（必需）
-    "XDG_RUNTIME_DIR",      # 用户运行时目录（必需）
-    "DBUS_SESSION_BUS_ADDRESS",  # D-Bus 会话总线（必需）
-    "WAYLAND_DISPLAY",      # Wayland 显示（可选，X11 下不存在）
+    "DISPLAY",
+    "XDG_RUNTIME_DIR",
+    "DBUS_SESSION_BUS_ADDRESS",
+    "WAYLAND_DISPLAY",
 ]
 ```
 
-这是用于把桌面环境的一些变量传给浏览器的，一般保持默认即可：
-- 不换桌面环境 / 显示服务器时，**不要改它**。
-- 脚本会自动尝试从 `gnome-shell` 进程读取这些变量，如果读取失败会使用默认值。
+脚本会自动从 `gnome-shell` 进程读取这些变量；读取失败时使用合理默认值。
 
 ---
 
@@ -99,22 +117,20 @@ self.NEEDED = [
 ### 4.1 依赖安装
 
 ```bash
-# 创建虚拟环境（可选）
-python3 -m venv ~/myenv
-source ~/myenv/bin/activate
-
-# 安装依赖
+python3 -m venv ~/Seeed/venv
+source ~/Seeed/venv/bin/activate
 pip install colorlog
 ```
 
 ### 4.2 手动运行测试
 
 ```bash
-cd /home/recomputer/seeed/reCameraStart
+cd /home/seeed/Seeed/ReCamera_start
+source /home/seeed/Seeed/venv/bin/activate
 python3 reCameraStart.py
 ```
 
-如果一切正常，Firefox 浏览器会以 Kiosk 模式全屏打开 reCamera 控制台。
+如果一切正常，Firefox 会以 Kiosk 模式全屏打开 reCamera 控制台。
 
 ---
 
@@ -122,66 +138,45 @@ python3 reCameraStart.py
 
 ### 方案一：使用 autostart 桌面文件（推荐）
 
-这是最简单可靠的方式：
+将 `deploy/reCameraStart.desktop` 复制到自启动目录，并按实际路径修改 `Exec` 中的 venv 与脚本路径：
 
 ```bash
-# 创建 autostart 目录
 mkdir -p ~/.config/autostart
-
-# 创建桌面启动文件
-cat > ~/.config/autostart/recamera.desktop << 'EOF'
-[Desktop Entry]
-Type=Application
-Name=reCamera Browser
-Comment=Auto start reCamera dashboard
-Exec=sh -c 'sleep 5 && /home/recomputer/myenv/bin/python /home/recomputer/seeed/reCameraStart/reCameraStart.py'
-Hidden=false
-NoDisplay=false
-X-GNOME-Autostart-enabled=true
-Terminal=false
-EOF
+cp deploy/reCameraStart.desktop ~/.config/autostart/
+chmod 644 ~/.config/autostart/reCameraStart.desktop
 ```
 
-重启后浏览器会自动打开。
+桌面快捷方式（手动点击启动）：
+
+```bash
+cp deploy/reCamera.desktop ~/Desktop/
+chmod +x ~/Desktop/reCamera.desktop
+```
+
+`reCameraStart.desktop` 中建议保留：
+
+```ini
+X-GNOME-Autostart-Delay=5
+```
+
+作为额外缓冲；主要等待逻辑由 `wifi_task.py` 内的轮询完成，不再依赖固定 `sleep`。
 
 ### 方案二：使用 systemd 用户服务
 
-```bash
-# 创建服务目录
-mkdir -p ~/.config/systemd/user/
+若使用 systemd，请在 `ExecStart` 中调用本项目的 `reCameraStart.py`，**不要**直接启动 Firefox（会跳过等待逻辑）：
 
-# 创建服务文件
-cat > ~/.config/systemd/user/recamera.service << 'EOF'
-[Unit]
-Description=reCamera Firefox Kiosk
-After=default.target
-
+```ini
 [Service]
 Type=simple
-ExecStartPre=/bin/sleep 10
-ExecStart=/usr/bin/firefox --kiosk http://192.168.42.1/#/dashboard
-Restart=on-failure
-RestartSec=5
+ExecStart=/home/seeed/Seeed/venv/bin/python /home/seeed/Seeed/ReCamera_start/reCameraStart.py
 Environment="DISPLAY=:0"
-
-[Install]
-WantedBy=default.target
-EOF
-
-# 启用 lingering（让用户服务开机就启动）
-sudo loginctl enable-linger $USER
-
-# 重新加载并启用服务
-systemctl --user daemon-reload
-systemctl --user enable recamera.service
-systemctl --user start recamera.service
 ```
 
 ---
 
 ## 6. 浏览器模式切换
 
-在 `process/wifi_task.py` 中可以切换浏览器启动模式：
+在 `process/wifi_task.py` 的 `start_browser()` 中：
 
 ```python
 cmd = [
@@ -190,9 +185,6 @@ cmd = [
 ]
 ```
 
-- `--kiosk`：全屏模式，无地址栏、无菜单栏，适合展示用
-- 不加参数：普通窗口模式，方便调试
-
 ---
 
 ## 7. 日志查看
@@ -200,68 +192,141 @@ cmd = [
 日志文件保存在 `data/logs/` 目录下：
 
 ```bash
-# 查看今天的日志
-ls /home/recomputer/seeed/reCameraStart/data/logs/
-
-# 查看日志内容
-cat /home/recomputer/seeed/reCameraStart/data/logs/$(date +%Y-%m-%d)-all.log
+ls data/logs/
+cat data/logs/$(date +%Y-%m-%d)-all.log
 ```
 
 ---
 
 ## 8. 故障排查
 
+### 问题：重启后页面显示「无法连接」，手动点桌面图标又正常
+
+**原因：** 开机自启动时 Firefox 打开过早，reCamera 的 USB 网卡（`usb0`）尚未就绪。
+
+**处理：** 使用当前版本脚本即可（已内置等待逻辑）。若仍偶发失败，可增大 `waitTimeoutSec`，或检查 USB 线连接。
+
+验证网卡与连通性：
+
+```bash
+ip addr show usb0
+ping -c 2 192.168.42.1
+curl -I --connect-timeout 3 http://192.168.42.1/
+```
+
 ### 问题：手动运行正常，但开机不自启动
 
-1. 检查自动登录是否开启：
-   ```bash
-   sudo cat /etc/gdm3/custom.conf
-   ```
-   确保有：
-   ```ini
-   [daemon]
-   AutomaticLoginEnable=true
-   AutomaticLogin=recomputer
-   ```
-
-2. 如果用 systemd 服务，检查 lingering 是否开启：
-   ```bash
-   sudo loginctl enable-linger recomputer
-   ```
+1. 检查自动登录是否开启（`/etc/gdm3/custom.conf`）
+2. 确认 `~/.config/autostart/reCameraStart.desktop` 存在且 `X-GNOME-Autostart-enabled=true`
+3. desktop 文件权限应为 `644`（不要带可执行位）
 
 ### 问题：浏览器启动失败
 
-1. 确认 Firefox 已安装：
-   ```bash
-   which firefox
-   ```
+```bash
+which firefox
+echo $DISPLAY
+```
 
-2. 确认图形环境正常运行：
-   ```bash
-   echo $DISPLAY
-   ```
-
-3. 查看日志文件了解详细错误信息。
+并查看 `data/logs/` 下当日日志。
 
 ### 问题：页面打不开
 
-1. 确认 reCamera 设备已连接
-2. 测试网络连通性：
-   ```bash
-   ping 192.168.42.1
-   ```
+1. 确认 reCamera 已通过 USB 连接（`lsusb` 中应有 Cvitek NCM）
+2. 确认 `reCamera` 与 `reCameraHost` 配置一致
 3. 在普通浏览器中手动访问地址测试
 
 ---
 
-## 9. 修改步骤总结
+## 9. 一键部署到不同设备
 
-1. 打开项目中的 `data/globalData.py`
-2. 找到 `class GData` 里的 `__init__` 函数
-3. 按你的环境修改：
-   ```python
-   self.reCamera = "你的 reCamera 地址"
-   ```
-4. 保存文件，重新运行启动脚本或重启设备
+IP 会变、设备有多台时，**不要写死 IP**。使用 `deploy/devices.local.json` 管理设备列表。
 
-这样就完成了在不同环境下的基础适配。
+### 9.1 首次配置
+
+```bash
+# 复制模板
+cp deploy/devices.example.json deploy/devices.local.json
+```
+
+编辑 `deploy/devices.local.json`，为每台 recomputer 添加一条记录：
+
+```json
+{
+  "default": "recomputer-office",
+  "devices": {
+    "recomputer-office": {
+      "host": "192.168.1.28",
+      "user": "seeed",
+      "password": "你的密码",
+      "remote_home": "/home/seeed",
+      "project_dir": "Seeed/ReCamera_start",
+      "venv_dir": "Seeed/venv"
+    },
+    "recomputer-home": {
+      "host": "192.168.2.50",
+      "user": "seeed",
+      "password": "你的密码",
+      "remote_home": "/home/seeed",
+      "project_dir": "Seeed/ReCamera_start",
+      "venv_dir": "Seeed/venv"
+    }
+  }
+}
+```
+
+`devices.local.json` 已加入 `.gitignore`，密码不会误提交。
+
+### 9.2 部署命令
+
+安装部署依赖（仅在你自己的电脑上执行一次）：
+
+```bash
+pip install paramiko
+```
+
+常用命令：
+
+```bash
+# 查看已配置设备
+python deploy/deploy_to_device.py --list
+
+# 部署到默认设备
+python deploy/deploy_to_device.py
+
+# 部署到指定名称的设备
+python deploy/deploy_to_device.py --device recomputer-home
+
+# IP 临时变了：只覆盖 host，其他仍用配置里的账号密码
+python deploy/deploy_to_device.py --device recomputer-office --host 192.168.1.99
+
+# 先看会传什么，不实际上传
+python deploy/deploy_to_device.py --device recomputer-office --dry-run
+```
+
+也可用环境变量（适合 CI 或不想在命令行写密码）：
+
+```bash
+set RECAMERA_DEPLOY_DEVICE=recomputer-office
+set RECAMERA_DEPLOY_HOST=192.168.1.99
+set RECAMERA_DEPLOY_PASSWORD=你的密码
+python deploy/deploy_to_device.py
+```
+
+### 9.3 部署前会做什么
+
+1. **TCP 连通性检查** — 确认 IP 和 SSH 端口可达  
+2. **SSH 登录** — 验证用户名密码  
+3. **上传代码** — `reCameraStart.py`、`process/`、`data/`、`debug/`  
+4. **生成 desktop 文件** — 按该设备的 `remote_home`、`venv_dir` 自动写入路径  
+5. **远程语法检查** — `py_compile` 确保脚本无语法错误  
+
+部署失败时会明确提示是「连不上」还是「密码错」，不会静默部署到错误设备。
+
+---
+
+## 10. 修改步骤总结
+
+1. 打开 `data/globalData.py`，修改 `reCamera`、`reCameraHost` 等
+2. 在 `deploy/devices.local.json` 中维护各设备的 SSH 地址
+3. 执行 `python deploy/deploy_to_device.py --device 设备名`（IP 变了加 `--host`）
+4. 重启目标设备验证
